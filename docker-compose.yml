@@ -1,100 +1,88 @@
 # version: '3.8' # Version autodetect in Docker v2.35.1
-volumes:
-    prometheus_data:
-      driver: local
-      driver_opts:
-        type: none
-        device: ~/prom/prometheus/prometheus_data
-        o: bind
-    grafana_data:
-      driver: local
-      driver_opts:
-        type: none
-        device: ~/prom/grafana/grafana_data
-        o: bind
-    alertmanager_data:
-      driver: local
-      driver_opts:
-        type: none
-        device: ~/prom/alertmanager/alertmanager_data
-        o: bind
+# Auto created on first run, stored in /var/lib/docker/volumes/ and use the default driver (local).
+volumes:                                     # Named volumes for storing data services (managed by Docker)
+    prometheus_data: {}
+    grafana_data: {}
+    alertmanager_data: {}
 
-networks:
-  front-tier:
-  back-tier:
+networks:                                    # Network for interaction of services
+  front-tier:                                # External network
+  motorinag-my-netology-hw:                  # Internal network (Back-tier)
     driver: bridge
     ipam:
       config:
         - subnet: 10.5.0.0/16
 
-services:
-
-# Prometheos
+services:                                    # Declare a services section
   prometheus:
-    user: "655534:655534" # UID Prometheos
-    image: prom/prometheus:v3.3.0 # Fix version 2025.04.21
-    volumes:
-      - ./prometheus/:/etc/prometheus/
-      - prometheus_data:/prometheus
+    depends_on:                              # Container startup order (depends_on)
+      - pushgateway                          # Waiting for Pushgateway
+      - alertmanager                         # Waiting for Alertmanager
+    user: "65534:65534"                      # UID Prometheos
+    image: prom/prometheus:v3.3.0            # Fix version 2025.04.21
+    container_name: motorinag-netology-prometheus # Set the container name
     command:
       - '--config.file=/etc/prometheus/prometheus.yml'
-      - '--storage.tsdb.path=/prometheus'
-      - '--web.console.libraries=/usr/share/prometheus/console_libraries'
-      - '--web.console.templates=/usr/share/prometheus/consoles'
+      - '--storage.tsdb.path=/prometheus' 
     ports:
-      - "9090:9090"
+      - "9090:9090"                          # Port forwarding
+    networks:
+      - motorinag-my-netology-hw             # Connecting to the back-tier network
+    volumes:
+      - prometheus_data:/prometheus          # Named volume-data for metrics
+      - ./prometheus/:/etc/prometheus/       # Mounted config files are located in ./prometheus/
     links:
       - alertmanager:alertmanager
-      - pushgateway:pushgateway
-    depends_on:
-      - pushgateway
-    networks:
-      - back-tier
-    restart: always
+      - pushgateway:pushgateway 
     environment:
       TZ: "Europe/Moscow"
-
-# Alertmanager
-  alertmanager:
-    user: "65534:65534" # UID Alertmanager
-    image: prom/alertmanager:v0.28.1 # Fix version 2025.04.21
+    restart: unless-stopped                  # Restart on any termination except manual stop
+    
+  pushgateway:
+    image: prom/pushgateway:v1.11.1          # Fix version 2025.04.21
+    container_name: motorinag-netology-pushgateway # Set the container name
     ports:
-      - "9093:9093"
+      - "9091:9091"                          # Port forwarding
+    networks:
+      - motorinag-my-netology-hw             # Connecting to the network
+    restart: on-failure                      # Only on errors (exit code != 0)
+    
+  grafana:
+    depends_on:                              # Container startup order (depends_on)
+      - prometheus                           # Waiting for Prometheus to launch
+    image: grafana/grafana:11.6.0            # Fix version 2025.04.21
+    container_name: motorinag-netology-grafana # Set the container name
+    user: "472:472"                          # UID Grafana
+    ports:                                   # Port forwarding
+      - "8080:3000"                          # Forwarding from host port 8080 to port 3000 because port 80 is busy
+    networks:
+      - motorinag-my-netology-hw             # Connecting to the back-tier network
+      - front-tier
+    volumes:
+      - grafana_data:/var/lib/grafana
+      - ./grafana/config/custom.ini:/etc/grafana/grafana.ini:ro # Mount custome setting to standard file custom.ini
+      - ./grafana/provisioning/:/etc/grafana/provisioning/
+    environment:
+      GF_PATHS_CONFIG: /etc/grafana/grafana.ini # Standard path in Grafana
+      GF_SERVER_HTTP_PORT: 3000
+      TZ: "Europe/Moscow"
+    env_file:
+      - ./grafana/config.monitoring
+    restart: always                          # Always restart (even if stopped manually)
+    
+  alertmanager:
+    depends_on:                              # Container startup order (depends_on)
+    - pushgateway                            # Waiting for Pushgateways to launch
+    user: "65534:65534"                      # UID Alertmanager
+    container_name: motorinag-netology-alertmanager # Set the container name
+    image: prom/alertmanager:v0.28.1         # Fix version 2025.04.21
+    ports:
+      - "9093:9093"                          # Port forwarding
+    networks:
+      - motorinag-my-netology-hw             # Connecting to the back-tier network
     volumes:
       - alertmanager_data:/alertmanager
       - ./alertmanager/alertmanager.yml:/etc/alertmanager/alertmanager.yml
-    networks:
-      - back-tier
     environment:
       TZ: "Europe/Moscow"
-    restart: unless-stopped
-
-# Grafana
-  grafana:
-    image: grafana/grafana:11.6.0 # Fix version 2025.04.21
-    user: "472:472" # UID Grafana
-    depends_on:
-      - prometheus
-    ports:
-      - "3000:3000"
-    volumes:
-      - grafana_data:/var/lib/grafana
-      - ~/prom/grafana/config/custom.ini:/etc/grafana/custom.ini  # Mounting the file custome.ini
-      - ./grafana/provisioning/:/etc/grafana/provisioning/
-    environment:
-      - GF_PATHS_CONFIG=/etc/grafana/custom.ini
-    env_file:
-      - ./grafana/config.monitoring
-    networks:
-      - back-tier
-      - front-tier
-    restart: always
-
-# Pushgateway
-  pushgateway:
-    image: prom/pushgateway:v1.11.1 # Fix version 2025.04.21
-    ports:
-      - "9091:9091"
-    networks:
-      - back-tier
-    restart: on-failure
+    restart: unless-stopped                  # Restart on any termination except manual stop
